@@ -18869,11 +18869,11 @@ op_db: list[OpInfo] = [
                # Could not run 'aten::narrow_copy.out' with arguments from the 'CUDA' backend
                # torch-xpu-ops/issues/2309
                DecorateInfo(unittest.expectedFailure, 'TestMeta', 'test_meta_outplace',
-                            device_type=('cuda', 'xpu'),
+                            device_type=('cuda', 'xpu')),
                DecorateInfo(unittest.expectedFailure, 'TestMeta', 'test_dispatch_meta_outplace',
                             device_type=('cuda', 'xpu')),
                DecorateInfo(unittest.expectedFailure, 'TestMeta', 'test_dispatch_symbolic_meta_outplace',
-                            device_type=('cuda', 'xpu'),
+                            device_type=('cuda', 'xpu')),
                DecorateInfo(unittest.expectedFailure, 'TestMeta', 'test_dispatch_symbolic_meta_outplace_all_strides'),
            )),
     OpInfo('view_copy',
