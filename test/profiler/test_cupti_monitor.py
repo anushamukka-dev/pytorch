@@ -218,6 +218,35 @@ class TestCuptiRecords(TestCase):
         self.assertNotIn(2, m._id_chains)
         self.assertIn(1, m._id_chains)
 
+    @unittest.skipIf(not TEST_CUPTI_V13_3, "requires libcupti >= 13.3")
+    def test_drain_polls_pm_consumers(self):
+        # Regression: PM-sampling frames must be pulled on the drain path. flush() and
+        # the background drain loop both funnel through _drain_and_dispatch, so the PM
+        # poll is folded there -- the native self-flush thread never touches the PM ring
+        # (poll()/deliver are GIL work). Pure: a fake consumer, no CUDA/session.
+        import numpy as np
+
+        from torch.profiler._cupti.monitor import CuptiMonitor
+
+        class _FakeHandle:
+            def __init__(self):
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return {"start_ns": np.array([100, 200], dtype=np.int64)}
+
+        m = CuptiMonitor()
+        delivered: list = []
+        handle = _FakeHandle()
+        m._pm_consumers[lambda frame: delivered.append(frame)] = handle
+
+        m._drain_and_dispatch()
+
+        self.assertEqual(handle.polls, 1)
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(list(delivered[0]["start_ns"]), [100, 200])
+
     def test_metadata_store_roundtrip(self):
         # The CollTrace-replacement metadata store: producers put a JSON object keyed
         # by the CURRENT external-correlation id on this thread's stack (pushed around
@@ -501,7 +530,12 @@ class TestCuptiMonitorCUDA(TestCase):
 
         lock = threading.Lock()
         columns: list = []
-        monitor = CuptiMonitor()
+        # Fully caller-driven (both periods < 0): no background self-flush and no
+        # background drain, so the explicit flush(sync=True) below is the sole,
+        # deterministic flush + drain -- nothing races it to consume the decoded columns.
+        monitor = CuptiMonitor(
+            background_flush_period_s=-1, background_drain_period_s=-1
+        )
 
         def on_columns(cols):
             if kind in cols:
@@ -758,7 +792,7 @@ class TestCuptiMonitorCUDA(TestCase):
                     len(next(iter(c.values()))) if c else 0
                 )
 
-        m = CuptiMonitor(buffer_size=1024, flush_period_s=0.02)
+        m = CuptiMonitor(buffer_size=1024, background_flush_period_s=0.02)
         want = {
             ActivityKind.CONCURRENT_KERNEL: {
                 Kernel.START,
