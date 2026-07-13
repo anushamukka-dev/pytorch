@@ -42,6 +42,8 @@ from torch._inductor.kernel.flex_gemm.constraints import (
 from torch._inductor.kernel.flex_gemm.quack_reductions import (
     _cute_arg,
     _cute_call,
+    _cute_op_name,
+    _keepdim_and_broadcast,
     _local_reduce_store_arg,
     FlexGemmPhysicalReduction,
     grouped_tensor_layout,
@@ -1120,6 +1122,35 @@ def materialize_flex_gemm_epilogue(
                         )
                         if physical_finalize is not None:
                             env[node] = physical_finalize
+                            continue
+                    if (
+                        local_reduce_feed_main is None
+                        and is_shape_preserving
+                        and _cute_op_name(node.target) == "mx_e8m0_scale"
+                        and node.args
+                        and isinstance(node.args[0], torch.fx.Node)
+                    ):
+                        reduction = reduction_from_node(node.args[0])
+                        if (
+                            reduction is not None
+                            and isinstance(reduction[0], torch.fx.Node)
+                            and reduction[0] in grouped_tensors
+                        ):
+                            node_args = tuple(_cute_arg(arg, env) for arg in node.args)
+                            node_kwargs = {
+                                key: _cute_arg(value, env)
+                                for key, value in node.kwargs.items()
+                            }
+                            env[node] = _cute_call(node.target, node_args, node_kwargs)
+                            reduction_input = reduction[0]
+                            _, local_reduce_store_sources[node] = (
+                                _keepdim_and_broadcast(
+                                    kernel,
+                                    env[node],
+                                    grouped_tensors[reduction_input],
+                                    _cute_arg(reduction_input, env),
+                                )
+                            )
                             continue
                     if (
                         local_reduce_feed_main is None
