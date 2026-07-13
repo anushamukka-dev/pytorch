@@ -115,10 +115,22 @@ if [[ -z "$PYTORCH_ROOT" ]]; then
     exit 1
 fi
 pushd "$PYTORCH_ROOT"
+# Make `pkg-config python3` resolve the interpreter we're building for: the
+# manylinux ROCm image ships the distro's python3-devel (Python 3.6), whose
+# python3.pc is on pkg-config's default path and hijacks meson's Cython sanity
+# check when a dep (e.g. NumPy) is built from source for a Python with no
+# released wheels yet (e.g. 3.15). Prepend this interpreter's pkgconfig dir.
+_py_libpc="$(python -c 'import sysconfig; print(sysconfig.get_config_var("LIBPC") or "")')"
+if [[ -n "${_py_libpc}" && -f "${_py_libpc}/python3.pc" ]]; then
+  export PKG_CONFIG_PATH="${_py_libpc}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+fi
 retry pip install -qUr requirements-build.txt
 python setup.py clean
 retry pip install -qr requirements.txt
 case ${DESIRED_PYTHON} in
+  cp315*)
+    retry pip install -q --pre numpy==2.5.1
+    ;;
   cp314*)
     retry pip install -q --pre numpy==2.3.4
     ;;

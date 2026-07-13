@@ -11,15 +11,19 @@ import argparse
 import os
 import subprocess
 import sys
+import sysconfig
 import time
 from pathlib import Path
 
 
-# NumPy build-time pin selected by Python version.
+# NumPy build-time pin selected by Python version. Checked high-to-low; the
+# first entry whose (major, minor) floor is satisfied wins. A plain string
+# prefix ("cp31") would wrongly capture cp315, so match on the version tuple.
 # Keep in sync with .ci/manywheel/build_common.sh.
-NUMPY_PINS: list[tuple[str, str]] = [
-    ("cp314", "2.3.4"),
-    ("cp31", "2.1.0"),
+NUMPY_PINS: list[tuple[tuple[int, int], str]] = [
+    ((3, 15), "2.5.1"),
+    ((3, 14), "2.3.4"),
+    ((3, 10), "2.1.0"),
 ]
 DEFAULT_NUMPY = "2.0.2"
 
@@ -42,11 +46,31 @@ def pip_install(*args: str) -> None:
 
 
 def numpy_pin() -> str:
-    tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    for prefix, version in NUMPY_PINS:
-        if tag.startswith(prefix):
-            return version
+    version = sys.version_info[:2]
+    for floor, pin in NUMPY_PINS:
+        if version >= floor:
+            return pin
     return DEFAULT_NUMPY
+
+
+def prefer_target_python_pkgconfig() -> None:
+    """Make ``pkg-config python3`` resolve the interpreter we are building for.
+
+    The manylinux ROCm image ships the distro's ``python3-devel`` (Python 3.6),
+    whose ``python3.pc`` sits on pkg-config's default search path. When a build
+    dependency such as NumPy is compiled from source -- unavoidable on a Python
+    with no released wheels yet, e.g. 3.15 -- its meson Cython sanity check
+    resolves ``pkg-config python3`` to that 3.6 ``.pc`` and fails with
+    "Cython requires Python 3.8+". Prepend this interpreter's own pkgconfig dir
+    so the correct Python wins the lookup (pkg-config searches PKG_CONFIG_PATH
+    before its default libdir).
+    """
+    libpc = sysconfig.get_config_var("LIBPC")
+    if libpc and os.path.isfile(os.path.join(libpc, "python3.pc")):
+        existing = os.environ.get("PKG_CONFIG_PATH", "")
+        os.environ["PKG_CONFIG_PATH"] = (
+            f"{libpc}{os.pathsep}{existing}" if existing else libpc
+        )
 
 
 def main() -> None:
@@ -55,6 +79,7 @@ def main() -> None:
     args = parser.parse_args()
 
     os.chdir(args.package_dir)
+    prefer_target_python_pkgconfig()
     pip_install("-qU", "-r", "requirements-build.txt")
     # The CUPTI field-id codegen (tools/gen_cupti_stubs.py) parses cupti_activity.h with
     # libclang's python bindings. Install libclang only when a sufficiently-new CUPTI header
